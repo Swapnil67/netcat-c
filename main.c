@@ -92,12 +92,10 @@ int main() {
 	// * Listen for terminal input
 	for(;;) {
 	    int c = fgetc(stdin);
-	    // printf("%d \n", c);
 	    if(c == EOF) break;
 	    if ((*buf++ = (char) c) == '\n') {
 		*buf = '\0';
-		// printf("%s - %ld\n", bufp, strlen(bufp));
-
+		
 		// * Send the buf to client
 		ssize_t bytes_sent = send(client_fd, bufp, strlen(bufp), 0);
 		if(bytes_sent < 0) {	
@@ -111,11 +109,10 @@ int main() {
 	}
     }
     
-
-    // int err = close(client_fd);
-    // if(err < 0) {	
-    // 	fprintf(stderr, "Could not close the connection. %s\n", strerror(errno));	
-    // }
+    int err = close(client_fd);
+    if(err < 0) {	
+	fprintf(stderr, "Could not close the connection. %s\n", strerror(errno));	
+    }
        
     return 0;    
 }

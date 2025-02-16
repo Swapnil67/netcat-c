@@ -65,7 +65,6 @@ ssize_t get_port(const char *port_str) {
 }
 
 void spwan_server(uint32_t port) {
-    printf("HTTP Server in C\n");
     const char *localhost = "127.0.0.1";
 
     // * Create a server socket
@@ -154,7 +153,7 @@ void spwan_server(uint32_t port) {
 	    break;
 	}
 	buf[bytes] = '\0';
-	printf("%s", buf);
+	printf("> %s", buf);
 	buf -= bytes;
     }
     
@@ -225,7 +224,7 @@ int spwan_client(const char *ip, const char *port) {
 	    break;
 	}
 	buf[bytes] = '\0';
-	printf("%s", buf);
+	printf("> %s", buf);
 	buf -= bytes;
     }
 

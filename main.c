@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <unistd.h>
 
 #include <netdb.h>
@@ -10,21 +11,62 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#define PORT 6969
+#define KILO 1024
+#define MEGA 1024 * KILO
+#define GIGA 1024 * MEGA
 
-char msg[] = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Cras vitae nisl sit amet dui lobortis suscipit. In vehicula euismod elit eget sollicitudin. Morbi lacinia ligula a consectetur luctus. Praesent sollicitudin mi pretium, tempus magna eu, volutpat risus. Proin urna urna, aliquet molestie massa sed, gravida sodales justo. Pellentesque pretium fermentum ipsum eget mollis. Vestibulum facilisis convallis turpis, in vehicula ligula aliquet imperdiet.\n"
-"In et sapien risus. Nunc pretium maximus nibh sed viverra. Nam vitae eleifend leo. Aliquam ut venenatis nulla. Integer quis venenatis quam. Nullam quis tempus dui. Sed in pellentesque ligula. Quisque sit amet arcu at ligula volutpat elementum. Vivamus vel nulla nisi. Donec quis consectetur turpis. Proin nec metus at magna consequat finibus. Sed placerat maximus tellus, non mattis urna pellentesque egestas. Phasellus ut purus libero. Nulla feugiat scelerisque sem, et dictum ante consequat vitae.\n"
-"Nullam a tincidunt enim. Quisque vel tincidunt nulla. Vivamus imperdiet nulla in lacinia posuere. Nullam eu luctus nulla. Proin pharetra, augue ac pellentesque mollis, lorem justo finibus ex, eget congue orci metus eu ipsum. In ut aliquet velit. Proin sodales nisl quis varius pulvinar. Vestibulum vestibulum porta suscipit. Donec purus dolor, pulvinar vulputate euismod quis, luctus sit amet lorem. Nulla pulvinar nibh efficitur metus condimentum, sed feugiat nibh ultrices.\n"
-"Morbi eu lacinia mi. Duis vel ligula id lacus malesuada sollicitudin. Mauris nec vulputate justo. Nunc consectetur erat id ligula scelerisque, vitae placerat magna pharetra. Pellentesque ut aliquam velit. In ultrices sodales varius. Donec vel leo convallis, ultricies mi ut, dignissim felis. Suspendisse potenti. Praesent a libero sit amet magna vulputate pulvinar sed at est. Vestibulum metus quam, malesuada ac sem hendrerit, laoreet fermentum eros. Duis a luctus ex. Proin fermentum sapien at ligula rutrum, in semper tortor scelerisque.\n";
-
-
-int main() {
-    printf("HTTP Server in C\n");
-    const char *localhost = "127.0.0.1";
-
+// * Listen for input on stdin
+void *listen_input(void *arg) {
     char *buf = malloc(100), *bufp = buf;
     (void) bufp;
     
+    // printf("Listening for input %d\n", *(int *)arg);
+    int client_fd = *(int*)arg;
+    // * Listen for terminal input
+    for(;;) {
+	int c = fgetc(stdin);
+	if(c == EOF) break;
+	if ((*buf++ = (char) c) == '\n') {
+	    *buf = '\0';
+
+	    // * Send the buf to client
+	    ssize_t bytes_sent = send(client_fd, bufp, strlen(bufp), 0);
+	    if(bytes_sent < 0) {	
+		fprintf(stderr, "Could not sent message. %s\n", strerror(errno));		
+	    }
+
+	    // * Empty the buffer
+	    buf -= strlen(buf);
+	    bufp = buf;    
+	}	
+    }
+    
+    return NULL;
+}
+
+// get sockaddr, IPv4 or IPv6:
+void *get_in_addr(struct sockaddr *sa)
+{
+    if (sa->sa_family == AF_INET) {
+        return &(((struct sockaddr_in*)sa)->sin_addr);
+    }
+
+    return &(((struct sockaddr_in6*)sa)->sin6_addr);
+}
+
+ssize_t get_port(const char *port_str) {
+    char *endptr;    
+    int base = 10;
+    ssize_t port = (ssize_t) strtoul(port_str, &endptr, base);
+    if(endptr == port_str) {
+	return -1;
+    }
+    return port;
+}
+
+void spwan_server(uint32_t port) {
+    printf("HTTP Server in C\n");
+    const char *localhost = "127.0.0.1";
 
     // * Create a server socket
     int server_fd = socket(PF_INET, SOCK_STREAM, 0);
@@ -32,13 +74,11 @@ int main() {
 	fprintf(stderr, "Could not crate socket: %s\n", strerror(errno));
 	exit(1);
     }
-    printf("server_fd: %d\n", server_fd);
-
     // * Create a socketaddr_in structure
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     // Host to Network short
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port = htons((uint16_t)port);
     // presentation to network
     int err = inet_pton(AF_INET, localhost, &(server_addr.sin_addr));
     if(err == 0) {
@@ -50,12 +90,6 @@ int main() {
 	exit(1);
     }
     memset(server_addr.sin_zero, '\0', sizeof server_addr.sin_zero);
-
-
-    // * Get the IPv4
-    // char ip4[INET_ADDRSTRLEN];
-    // inet_ntop(AF_INET, &(server_addr.sin_addr), ip4, INET_ADDRSTRLEN);
-    // printf("The IPv4 address is: %s\n", ip4);
 
     // * Socket options
     int so_reuseaddr_opt = 1;
@@ -78,44 +112,157 @@ int main() {
 	exit(1);
     }
 
+    const size_t MAXDATASIZE = 640 * KILO; // * 640 KB    
+    char *buf = malloc(MAXDATASIZE); 
+
+    printf("server: waiting for connections...\n");
+    
+
+    int client_fd;
+    struct sockaddr_storage client_addr;
+    socklen_t client_addr_size;
+    
     for(;;) {
 	// * accept an incoming connection	
-	struct sockaddr_storage client_addr;
-	socklen_t client_addr_size;
-	int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_size);
-	printf("Client Connected: %d\n", client_fd);
+	client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_size);
 	if(client_fd < 0) {	    
 	    fprintf(stderr, "Unable to accept connections. %s\n", strerror(errno));	    
 	    exit(1);
 	}
 
-	// * Listen for terminal input
-	for(;;) {
-	    int c = fgetc(stdin);
-	    // printf("%d \n", c);
-	    if(c == EOF) break;
-	    if ((*buf++ = (char) c) == '\n') {
-		*buf = '\0';
-		// printf("%s - %ld\n", bufp, strlen(bufp));
+	// printf("Client Connected: %d\n", client_fd);
+	break;
+    }
 
-		// * Send the buf to client
-		ssize_t bytes_sent = send(client_fd, bufp, strlen(bufp), 0);
-		if(bytes_sent < 0) {	
-		    fprintf(stderr, "Could not sent message. %s\n", strerror(errno));		
-		}
 
-		// * Empty the buffer
-		buf -= strlen(buf);
-		bufp = buf;    
-	    }	
+    // * Network to presentation
+    char s[INET6_ADDRSTRLEN];
+    inet_ntop(client_addr.ss_family, get_in_addr((struct sockaddr *)&client_addr), s, sizeof s);
+    printf("server: got connection from %s\n", s);
+    printf("Send message to client...\n");
+
+    // * Listen of input on stdin
+    pthread_t listener;
+    pthread_create(&listener, NULL, listen_input, &client_fd);
+
+    // * Keep reading Incomming Bytes    
+    for(;;) {
+	ssize_t bytes = recv(client_fd, buf, MAXDATASIZE-1, 0);
+	// printf("Received Bytes: %ld\n", bytes);
+	if(bytes == 0) {
+	    printf("server: peer closed the connection\n");
+	    break;
 	}
+	buf[bytes] = '\0';
+	printf("%s", buf);
+	buf -= bytes;
     }
     
+    err = close(client_fd);
+    if(err < 0) {	
+	fprintf(stderr, "Could not close the connection. %s\n", strerror(errno));	
+    }
+    return;
+}
 
-    // int err = close(client_fd);
-    // if(err < 0) {	
-    // 	fprintf(stderr, "Could not close the connection. %s\n", strerror(errno));	
-    // }
-       
+int spwan_client(const char *ip, const char *port) {
+    int sockfd;
+    
+    struct addrinfo hints, *serverinfo, *p;
+    memset(&hints, 0, sizeof hints);
+
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    // DNS resolution
+    int err = getaddrinfo(ip, port, &hints, &serverinfo);
+    if(err != 0) {
+	fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
+	return 1;
+    }
+    
+    // * loop through all the results and connect to the first we can
+    for(p = serverinfo; p != NULL; p = p->ai_next) {
+	sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+	if(sockfd == -1) continue;
+
+	int err = connect(sockfd, p->ai_addr, p->ai_addrlen);
+	if(err < 0) {
+	    close(sockfd);
+	    continue;
+	}
+
+	break;  /* okay we got one */
+    }
+
+    if(p == NULL) {
+	fprintf(stderr, "client: failed to connect\n");	
+	return 2;
+    }
+
+
+    // * Network to presentation    
+    char s[INET6_ADDRSTRLEN];
+    inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr), s, sizeof s);
+    printf("client: connecting to %s\n", s);
+    printf("Send message to server...\n");
+    
+
+    freeaddrinfo(serverinfo); // all done with this structure
+
+    const size_t MAXDATASIZE = 640 * KILO; // * 640 KB
+    char *buf = malloc(MAXDATASIZE); 
+
+    // * Listen of input on stdin    
+    pthread_t listener;
+    pthread_create(&listener, NULL, listen_input, &sockfd);
+
+    // * Keep reading Incomming Bytes
+    for(;;) {
+	ssize_t bytes = recv(sockfd, buf, MAXDATASIZE-1, 0);
+	// printf("Received Bytes: %ld\n", bytes);	
+	if(bytes == 0) {
+	    break;
+	}
+	buf[bytes] = '\0';
+	printf("%s", buf);
+	buf -= bytes;
+    }
+
+    printf("client: peer closed the connection\n");
+    close(sockfd);
+        
+    return sockfd;
+}
+
+int main(int argc, char *argv[]) {
+    if(argc != 3) {
+	fprintf(stderr, "Invalid usage\n");
+    }
+
+
+    if(strcmp(argv[1], "-l") == 0) {
+	// nc server
+	char *port_str = argv[2];	
+	ssize_t port = get_port(port_str);
+	if(port < 0) {
+	    fprintf(stderr, "Invalid port: %s\n", port_str);	    
+	    exit(1);	    	
+	}
+	printf("Spwan server on port %ld\n", port);	
+	spwan_server((uint32_t)port);
+    }
+    else {
+	// nc client
+	const char *ip = argv[1];
+	const char *port_str = argv[2];
+	ssize_t port = get_port(port_str);
+	if(port < 0) {
+	    fprintf(stderr, "Invalid port: %s\n", port_str);	    
+	    exit(1);	    	
+	}	
+	spwan_client(ip, port_str);
+    }
+    
     return 0;    
 }
